@@ -1,0 +1,283 @@
+import tkinter as tk
+from tkinter import ttk
+from tkinter import scrolledtext
+import serial
+import threading
+import os
+from serial.tools import list_ports
+
+class CircuitPythonREPLApp:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("NASA TECHRISE")
+        print("Debug: Initializing GUI")
+
+        self.port_var = tk.StringVar()
+
+        self.port_label = ttk.Label(self.master, text="Select Port:")
+        self.port_label.grid(row=0, column=0, pady=3)
+
+        self.port_combobox = ttk.Combobox(self.master, textvariable=self.port_var)
+        self.port_combobox['values'] = self.get_serial_ports()
+        self.port_combobox.grid(row=0, column=1, pady=3)
+
+        self.connect_button = ttk.Button(self.master, text="Connect", command=self.connect)
+        self.connect_button.grid(row=1, column=0, pady=3)
+
+        style = ttk.Style()
+        style.configure('Custom.TButton', background='blue')
+        self.list_button = ttk.Button(self.master, text="LIST", command=lambda: self.send_predefined_command("LIST"), style='Custom.TButton')
+        self.list_button.grid(row=1, column=1, pady=3)  
+
+        self.disconnect_button = ttk.Button(self.master, text="Disconnect", command=self.disconnect, state=tk.DISABLED)
+        self.disconnect_button.grid(row=1, column=2, pady=3)
+
+        self.console = scrolledtext.ScrolledText(self.master, width=60, height=20, wrap=tk.WORD)
+        self.console.grid(row=2, column=0, columnspan=3, pady=3)
+
+        self.entry = ttk.Entry(self.master, width=60)
+        self.entry.grid(row=3, column=0, columnspan=3, pady=3, padx=2)
+
+        self.send_button = ttk.Button(self.master, width=15, text="Download", command=self.send_command, state=tk.DISABLED) 
+        self.send_button.grid(row=3, column=2, padx=3)
+
+
+
+
+        self.ser = None
+        self.read_thread = None
+        self.alive = False
+
+        self.receiving_file = False
+        self.current_file_name = None
+        self.current_file_content = []
+
+        self.current_file_line_count = 0 
+        self.current_file_received_lines = 0  
+
+        self.receiving_DOWNLOAD = False
+        self.DOWNLOAD_data = []
+        self.download_file_name = None
+
+        self.skip_line = False
+
+        
+    
+    def send_predefined_command(self, command):
+        """Send predefined command when the respective button is clicked."""
+        if self.ser: 
+            if command == "DOWNLOAD":
+                file_name = self.entry.get().strip()
+                file_name_with_ext = file_name if file_name.endswith(".txt") else file_name + ".txt"
+                print(f"Debug: Sending predefined command: {file_name_with_ext}")
+                self.ser.write(("DOWNLOAD_" + file_name_with_ext + "\r\n").encode("utf-8"))
+
+                self.receiving_DOWNLOAD = True
+                self.DOWNLOAD_data = []
+                self.download_file_name = file_name_with_ext
+
+            elif command == "LIST":
+                print(f"Debug: Sending predefined command: {command}")
+                self.ser.write((command + "\r\n").encode("utf-8"))
+                self.list_button["state"] = tk.DISABLED
+            '''    
+            else:
+                print(f"Debug: Sending predefined command: {command}")
+                self.ser.write((command + "\r\n").encode("utf-8"))'''
+
+
+
+    def connect(self):
+        selected_port = self.port_var.get()
+        if not selected_port:
+            self.console.insert(tk.END, "Please select a port.\n")
+            return
+        
+        try:
+            print(f"Debug: Attempting to open serial connection on {selected_port}.")
+            self.ser = serial.Serial(selected_port, 115200, timeout=1) 
+            print("Debug: Serial connection opened.")
+        except Exception as e:
+            self.console.insert(tk.END, f"Failed to connect: {e}\n")
+            print(f"Debug: Failed to connect: {e}")
+            return
+
+        self.connect_button["state"] = tk.DISABLED
+        self.disconnect_button["state"] = tk.NORMAL
+        self.send_button["state"] = tk.NORMAL
+        self.list_button["state"] = tk.NORMAL
+
+        self.alive = True
+        self.read_thread = threading.Thread(target=self.read_from_port)
+        self.read_thread.start()
+
+        print("Debug: Connected")
+
+    def disconnect(self):
+        print("Debug: Disconnecting...")
+        self.alive = False
+        if self.read_thread:
+            self.read_thread.join()
+            print("Debug: Read thread joined.")
+
+        if self.ser:
+            self.ser.close()
+            print("Debug: Serial connection closed.")
+
+        self.connect_button["state"] = tk.NORMAL
+        self.disconnect_button["state"] = tk.DISABLED
+        self.send_button["state"] = tk.DISABLED
+        print("Debug: GUI elements updated after disconnect.")
+
+    def get_serial_ports(self):
+        """Get a list of all available serial ports."""
+        ports = list_ports.comports()
+        return [port.device for port in ports]
+
+    def read_from_port(self):
+        print("Debug: Starting read_from_port")
+        while self.alive:
+            buffer = ""
+            while self.alive:
+                if self.ser.in_waiting:
+                    print("Debug: Data available in serial buffer.")
+                    data = self.ser.read(self.ser.in_waiting).decode("utf-8", errors="ignore")
+                    buffer += data
+                    print(f"Debug: Received data: {data}")
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        self.process_line(line)
+
+    def process_line(self, line):
+        print(f"Debug: Processing line: {line}")
+
+        if line.startswith("DOWNLOAD_"):
+            print(f"Debug: Ignoring line: {line}")
+            return
+
+        if line.startswith("Filename:"):
+            self.receiving_file = True
+            self.current_file_name = line.split(":", 1)[1].strip()
+            self.current_file_content = []
+            self.current_file_received_lines = 0 
+            print(f"Debug: Receiving file: {self.current_file_name}")
+            return
+
+        if line.startswith("LineCount:"):
+            self.current_file_line_count = int(line.split(":", 1)[1].strip())
+            print(f"Debug: Line count: {self.current_file_line_count}")
+            return
+
+        if line.startswith('end'):
+            print("Debug: End received.")
+            self.receiving_file = False
+            self.save_current_file()
+            self.current_file_name = None
+            self.current_file_content = []
+            return
+
+        if self.receiving_file:
+            self.current_file_content.append(line)
+            self.current_file_received_lines += 1
+            print(f"Debug: Received {self.current_file_received_lines}/{self.current_file_line_count} lines.")
+            if self.current_file_received_lines % 100 == 0:  # Save after every 100 lines
+                self.save_current_file()
+                self.current_file_content = []  # Clear the content after saving
+
+
+
+        elif self.receiving_DOWNLOAD:
+            if line.strip() == "DOWNLOAD END":
+                print("Debug: DOWNLOAD end received")
+                self.receiving_DOWNLOAD = False
+                self.save_DOWNLOAD_data()
+
+                downloads = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Downloads')
+                file_path = os.path.join(downloads, f'{self.download_file_name}')
+                if os.path.exists(file_path):
+                    self.console.insert(tk.END, f"File '{self.download_file_name}' created in Downloads folder.\n")
+                else:
+                    self.console.insert(tk.END, f"Failed to create file '{self.download_file_name}' in Downloads folder.\n")
+            else:
+                if line.strip() == "Reading from sd card":
+                    self.skip_line = False
+                    return
+                if not self.skip_line:
+                    print(f"Debug: Comienzo: {line}")
+                    downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
+                    file_path = os.path.join(downloads_folder, f"{self.download_file_name}")
+
+                    with open(file_path, "a") as file:
+                        file.write(line + "\n")
+                    print(f"Debug: Appending DOWNLOAD data: {line}")
+                    self.DOWNLOAD_data.append(line)
+        else:
+            self.console.insert(tk.END, line + '\n')
+            self.console.see(tk.END)
+
+
+    def save_current_file(self):
+        print("Debug: Inside save_current_file")
+        if self.current_file_name and self.current_file_content:
+            desktop = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Desktop')
+            file_path = os.path.join(desktop, self.current_file_name)
+            print(f"Debug: Saving file to: {file_path}")
+
+            with open(file_path, "w") as f:
+                for line in self.current_file_content:
+                    if line.strip():
+                        f.write(line + '\n')
+
+            print(f"Debug: File {self.current_file_name} saved to desktop.")
+            self.console.insert(tk.END, f"File {self.current_file_name} saved to desktop.\n")
+            self.console.see(tk.END)
+
+    def save_DOWNLOAD_data(self):
+        downloads = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Downloads')
+        file_path = os.path.join(downloads, 'HOLA1.txt')
+        print(f"Debug: Downloads folder: {downloads}")
+        print(f"Debug: File path: {file_path}")
+
+        print("Debug: Saving DOWNLOAD data")
+        try:
+            with open(file_path, 'w') as f:
+                for line in self.DOWNLOAD_data:
+                    f.write(line + '\n')
+            print(f"Debug: DOWNLOAD data saved to {file_path}")
+            self.console.insert(tk.END, f"DOWNLOAD data saved to {file_path}\n")
+            self.console.see(tk.END)
+        except Exception as e:
+            print(f"Debug: Failed to save DOWNLOAD data: {e}")
+            self.console.insert(tk.END, f"Failed to save DOWNLOAD data: {e}\n")
+            self.console.see(tk.END)
+         
+            print(f"Failed to save DOWNLOAD data: {e}")
+
+      
+        if os.path.exists(file_path):
+            self.console.insert(tk.END, f"File created in Downloads folder.\n")
+        else:
+            self.console.insert(tk.END, f"Failed to create file in Downloads folder.\n")
+
+
+    def send_command(self):
+        if self.ser:
+            file_name = self.entry.get().strip()
+            file_name_with_ext = file_name if file_name.endswith(".txt") else file_name + ".txt"
+            print(f"Debug: Sending DOWNLOAD command: {file_name_with_ext}")
+            self.ser.write(("DOWNLOAD_" + file_name_with_ext + "\r\n").encode("utf-8"))
+
+          
+
+            self.receiving_DOWNLOAD = True
+            self.DOWNLOAD_data = []
+            self.download_file_name = file_name_with_ext
+        self.entry.delete(0, tk.END)
+
+
+
+if __name__ == "__main__":
+    print("Debug: Starting the script")
+    root = tk.Tk()
+    app = CircuitPythonREPLApp(root)
+    root.mainloop()
