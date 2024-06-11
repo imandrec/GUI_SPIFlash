@@ -2,4 +2,4 @@
 
 pip install -U pyinstaller
 
-pyinstaller main.py
+pyinstaller main.py --onefile --windowed
