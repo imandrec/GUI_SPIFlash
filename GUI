@@ -155,38 +155,14 @@ class CircuitPythonREPLApp:
             print(f"Debug: Ignoring line: {line}")
             return
 
-        if line.startswith("Filename:"):
-            self.receiving_file = True
-            self.current_file_name = line.split(":", 1)[1].strip()
-            self.current_file_content = []
-            self.current_file_received_lines = 0 
-            print(f"Debug: Receiving file: {self.current_file_name}")
-            return
+        if line.strip() == "DONE":
+            print("Debug: 'DONE' received, marking download complete")
+            self.receiving_DOWNLOAD = False
+            self.console.insert(tk.END, "Data done Downloading\n")  # Print to console
+            self.console.see(tk.END)
+            return  # Do not write this line to the file
 
-        if line.startswith("LineCount:"):
-            self.current_file_line_count = int(line.split(":", 1)[1].strip())
-            print(f"Debug: Line count: {self.current_file_line_count}")
-            return
-
-        if line.startswith('end'):
-            print("Debug: End received.")
-            self.receiving_file = False
-            self.save_current_file()
-            self.current_file_name = None
-            self.current_file_content = []
-            return
-
-        if self.receiving_file:
-            self.current_file_content.append(line)
-            self.current_file_received_lines += 1
-            print(f"Debug: Received {self.current_file_received_lines}/{self.current_file_line_count} lines.")
-            if self.current_file_received_lines % 100 == 0:  # Save after every 100 lines
-                self.save_current_file()
-                self.current_file_content = []  # Clear the content after saving
-
-
-
-        elif self.receiving_DOWNLOAD:
+        if self.receiving_DOWNLOAD:
             if line.strip() == "DOWNLOAD END":
                 print("Debug: DOWNLOAD end received")
                 self.receiving_DOWNLOAD = False
@@ -214,6 +190,7 @@ class CircuitPythonREPLApp:
         else:
             self.console.insert(tk.END, line + '\n')
             self.console.see(tk.END)
+
 
 
     def save_current_file(self):
